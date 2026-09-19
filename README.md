@@ -69,9 +69,17 @@ Open the printed `http://<tunnel-name>.localhost:8080` URL.
 
 Get an endpoint from [Rivet Cloud](https://rivet.dev) or a self-hosted Rivet deployment.
 
-**Step 2: Deploy the tunnel server**
+**Step 2: Build the tunnel server**
 
-Deploy the included `Dockerfile`. The single server handles both Rivet Actor requests and public tunnel traffic.
+Build the included `Dockerfile`. The resulting image contains the single server that handles both Rivet Actor requests and public tunnel traffic.
+
+```bash
+docker build -t rivet-tunnel-server .
+```
+
+**Step 3: Deploy the tunnel server**
+
+Deploy the image with these environment variables:
 
 ```bash
 RIVETKIT_RUNTIME_MODE=serverless \
@@ -82,11 +90,11 @@ rivet-tunnel-server
 
 Register `https://<server>/api/rivet` as the serverless actor runner for the endpoint.
 
-**Step 3: Configure wildcard DNS**
+**Step 4: Configure wildcard DNS**
 
 Point `*.example.com` at the server. Your proxy or load balancer must preserve the original `Host` header.
 
-**Step 4: Open a tunnel**
+**Step 5: Open a tunnel**
 
 Run the agent with the same Rivet endpoint and the public base URL.
 
