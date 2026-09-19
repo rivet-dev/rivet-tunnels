@@ -1,6 +1,6 @@
 # Rivet Tunnels
 
-> **Experimental:** This is an early prototype with no availability guarantees. Do not use it for production traffic.
+> **Warning:** This is a toy project for experimentation, not a production-ready implementation. Do not use it for production traffic.
 
 Expose a local HTTP server through a public URL backed by a Rivet Actor:
 
