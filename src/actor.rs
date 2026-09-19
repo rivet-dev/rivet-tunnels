@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::{
-	ConnectorMessage, DEFAULT_MAX_BODY_BYTES, Header, TunnelRequest, TunnelResponse,
-	TunnelServerMessage, is_hop_by_hop_header,
+	ActorMessage, AgentMessage, DEFAULT_MAX_BODY_BYTES, Header, TunnelRequest, TunnelResponse,
+	is_hop_by_hop_header,
 };
 
 pub const ACTOR_NAME: &str = "tunnel";
@@ -31,19 +31,19 @@ pub struct TunnelActor {
 }
 
 struct TunnelRuntime {
-	connector: Mutex<Option<Connector>>,
+	agent_session: Mutex<Option<AgentSession>>,
 	pending: Mutex<HashMap<u64, PendingRequest>>,
-	next_connector_id: AtomicU64,
+	next_session_id: AtomicU64,
 	next_request_id: AtomicU64,
 }
 
 struct PendingRequest {
-	connector_id: u64,
+	agent_session_id: u64,
 	sender: oneshot::Sender<Result<TunnelResponse, String>>,
 }
 
 #[derive(Clone)]
-struct Connector {
+struct AgentSession {
 	id: u64,
 	websocket: WebSocket,
 }
@@ -51,9 +51,9 @@ struct Connector {
 impl TunnelRuntime {
 	fn new() -> Self {
 		Self {
-			connector: Mutex::new(None),
+			agent_session: Mutex::new(None),
 			pending: Mutex::new(HashMap::new()),
-			next_connector_id: AtomicU64::new(1),
+			next_session_id: AtomicU64::new(1),
 			next_request_id: AtomicU64::new(1),
 		}
 	}
@@ -62,33 +62,33 @@ impl TunnelRuntime {
 		&self,
 		request_id: u64,
 		sender: oneshot::Sender<Result<TunnelResponse, String>>,
-	) -> Option<Connector> {
-		let connector = self.connector.lock();
-		let connector = connector.as_ref()?.clone();
+	) -> Option<AgentSession> {
+		let agent_session = self.agent_session.lock();
+		let agent_session = agent_session.as_ref()?.clone();
 		self.pending.lock().insert(
 			request_id,
 			PendingRequest {
-				connector_id: connector.id,
+				agent_session_id: agent_session.id,
 				sender,
 			},
 		);
-		Some(connector)
+		Some(agent_session)
 	}
 
-	fn handle_connector_message(&self, connector_id: u64, message: ConnectorMessage) {
+	fn handle_agent_message(&self, agent_session_id: u64, message: AgentMessage) {
 		let is_current = self
-			.connector
+			.agent_session
 			.lock()
 			.as_ref()
-			.is_some_and(|connector| connector.id == connector_id);
+			.is_some_and(|session| session.id == agent_session_id);
 		if !is_current {
 			return;
 		}
 
 		match message {
-			ConnectorMessage::Response(response) => {
+			AgentMessage::Response(response) => {
 				if let Some(pending) = self.pending.lock().remove(&response.id)
-					&& pending.connector_id == connector_id
+					&& pending.agent_session_id == agent_session_id
 				{
 					let _ = pending.sender.send(Ok(response));
 				}
@@ -96,33 +96,31 @@ impl TunnelRuntime {
 		}
 	}
 
-	fn detach_connector(&self, connector_id: u64) {
+	fn detach_agent(&self, agent_session_id: u64) {
 		{
-			let mut connector = self.connector.lock();
-			if !connector
+			let mut agent_session = self.agent_session.lock();
+			if !agent_session
 				.as_ref()
-				.is_some_and(|connector| connector.id == connector_id)
+				.is_some_and(|session| session.id == agent_session_id)
 			{
 				return;
 			}
-			*connector = None;
+			*agent_session = None;
 		}
-		self.fail_pending(connector_id);
+		self.fail_pending(agent_session_id);
 	}
 
-	fn fail_pending(&self, connector_id: u64) {
+	fn fail_pending(&self, agent_session_id: u64) {
 		let mut pending = self.pending.lock();
 		let request_ids: Vec<_> = pending
 			.iter()
 			.filter_map(|(request_id, request)| {
-				(request.connector_id == connector_id).then_some(*request_id)
+				(request.agent_session_id == agent_session_id).then_some(*request_id)
 			})
 			.collect();
 		for request_id in request_ids {
 			if let Some(request) = pending.remove(&request_id) {
-				let _ = request
-					.sender
-					.send(Err("tunnel connector disconnected".into()));
+				let _ = request.sender.send(Err("tunnel agent disconnected".into()));
 			}
 		}
 	}
@@ -179,17 +177,17 @@ impl Actor for TunnelActor {
 			body: req.body().clone(),
 		};
 
-		let payload = serde_cbor::to_vec(&TunnelServerMessage::Request(request))
-			.context("encode tunnel request")?;
+		let payload =
+			serde_cbor::to_vec(&ActorMessage::Request(request)).context("encode tunnel request")?;
 		let (response_tx, response_rx) = oneshot::channel();
-		let Some(connector) = self.runtime.begin_request(request_id, response_tx) else {
-			return Ok(text_response(503, "tunnel connector is offline")?.into());
+		let Some(agent_session) = self.runtime.begin_request(request_id, response_tx) else {
+			return Ok(text_response(503, "tunnel agent is offline")?.into());
 		};
-		connector.websocket.send(WsMessage::Binary(payload));
+		agent_session.websocket.send(WsMessage::Binary(payload));
 		let cancellation = req.cancellation_token();
 
 		let result = tokio::select! {
-			response = response_rx => response.context("connector dropped response")?,
+			response = response_rx => response.context("agent dropped response")?,
 			_ = cancellation.cancelled() => {
 			self.runtime.pending.lock().remove(&request_id);
 				return Ok(text_response(499, "client closed request")?.into());
@@ -221,23 +219,20 @@ impl Actor for TunnelActor {
 		websocket: WebSocket,
 		req: Request,
 	) -> Result<()> {
-		if !is_connector_path(req.uri().path()) {
+		if !is_agent_path(req.uri().path()) {
 			bail!("unknown tunnel websocket path");
 		}
 
-		let connector_id = self
-			.runtime
-			.next_connector_id
-			.fetch_add(1, Ordering::Relaxed);
+		let agent_session_id = self.runtime.next_session_id.fetch_add(1, Ordering::Relaxed);
 		let runtime = self.runtime.clone();
 		websocket.configure_message_event_callback(Some(Arc::new(move |message, _| {
 			let bytes = match message {
 				WsMessage::Binary(bytes) => bytes,
 				WsMessage::Text(_) => bail!("tunnel protocol requires binary CBOR messages"),
 			};
-			let message: ConnectorMessage =
-				serde_cbor::from_slice(&bytes).context("decode connector message")?;
-			runtime.handle_connector_message(connector_id, message);
+			let message: AgentMessage =
+				serde_cbor::from_slice(&bytes).context("decode agent message")?;
+			runtime.handle_agent_message(agent_session_id, message);
 			Ok(())
 		})));
 
@@ -245,24 +240,24 @@ impl Actor for TunnelActor {
 		websocket.configure_close_event_callback(Some(Arc::new(move |_, _, _| {
 			let runtime = runtime.clone();
 			Box::pin(async move {
-				runtime.detach_connector(connector_id);
+				runtime.detach_agent(agent_session_id);
 				Ok(())
 			})
 		})));
 
-		let previous = self.runtime.connector.lock().replace(Connector {
-			id: connector_id,
+		let previous = self.runtime.agent_session.lock().replace(AgentSession {
+			id: agent_session_id,
 			websocket: websocket.clone(),
 		});
 		if let Some(previous) = previous {
 			self.runtime.fail_pending(previous.id);
 			previous
 				.websocket
-				.close(Some(1012), Some("replaced by a new connector".into()))
+				.close(Some(1012), Some("replaced by a new tunnel agent".into()))
 				.await;
 		}
 
-		let ready = serde_cbor::to_vec(&TunnelServerMessage::Ready {
+		let ready = serde_cbor::to_vec(&ActorMessage::Ready {
 			actor_id: ctx.actor_id().to_owned(),
 		})?;
 		websocket.send(WsMessage::Binary(ready));
@@ -278,8 +273,8 @@ fn text_response(status: u16, message: &str) -> Result<Response> {
 	)
 }
 
-fn is_connector_path(path: &str) -> bool {
-	matches!(path, "/websocket/connect" | "/connect")
+fn is_agent_path(path: &str) -> bool {
+	matches!(path, "/websocket/agent" | "/agent")
 }
 
 #[cfg(test)]
@@ -288,8 +283,8 @@ mod tests {
 
 	#[test]
 	fn recognizes_rivetkit_raw_websocket_path() {
-		assert!(is_connector_path("/websocket/connect"));
-		assert!(is_connector_path("/connect"));
-		assert!(!is_connector_path("/websocket/other"));
+		assert!(is_agent_path("/websocket/agent"));
+		assert!(is_agent_path("/agent"));
+		assert!(!is_agent_path("/websocket/other"));
 	}
 }

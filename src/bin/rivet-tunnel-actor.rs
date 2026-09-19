@@ -3,6 +3,11 @@ use rivet_tunnel::{ACTOR_NAME, TunnelActor};
 use rivetkit::{Registry, ServeConfig};
 
 #[derive(Parser)]
+#[command(
+	name = "rivet-tunnel-actor",
+	version,
+	about = "Run the Rivet tunnel actor"
+)]
 struct Args {
 	/// Override the host used by a locally managed Rivet engine.
 	#[arg(long)]

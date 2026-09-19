@@ -18,9 +18,9 @@ use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(
-	name = "rivet-tunnel-ingress",
+	name = "rivet-tunnel-gateway",
 	version,
-	about = "Wildcard ingress for Rivet tunnels"
+	about = "Public gateway for Rivet tunnels"
 )]
 struct Args {
 	#[arg(long, env = "LISTEN_ADDR", default_value = "127.0.0.1:8080")]
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
 	});
 	let app = Router::new().fallback(any(proxy)).with_state(state);
 	let listener = tokio::net::TcpListener::bind(args.listen).await?;
-	tracing::info!(address = %args.listen, "tunnel ingress listening");
+	tracing::info!(address = %args.listen, "tunnel gateway listening");
 	axum::serve(listener, app).await?;
 	Ok(())
 }
@@ -79,7 +79,7 @@ async fn proxy(State(state): State<Arc<AppState>>, request: Request) -> Response
 	match proxy_inner(&state, request).await {
 		Ok(response) => response,
 		Err(error) => {
-			tracing::warn!(%error, "tunnel ingress request failed");
+			tracing::warn!(%error, "tunnel gateway request failed");
 			plain_response(StatusCode::BAD_GATEWAY, &error.to_string())
 		}
 	}
@@ -134,7 +134,7 @@ async fn proxy_inner(state: &AppState, request: Request) -> Result<Response<Body
 	copy_response_headers(response.headers_mut().unwrap(), &response_headers)?;
 	response
 		.body(Body::from(body))
-		.context("build ingress response")
+		.context("build gateway response")
 }
 
 fn copy_response_headers(target: &mut HeaderMap, source: &HeaderMap) -> Result<()> {

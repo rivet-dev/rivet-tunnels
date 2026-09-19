@@ -6,8 +6,8 @@ use futures_util::{SinkExt, StreamExt};
 use rand::{Rng, distr::Alphanumeric};
 use reqwest::{Client as HttpClient, Method, redirect::Policy};
 use rivet_tunnel::{
-	ACTOR_NAME, ConnectorMessage, DEFAULT_MAX_BODY_BYTES, Header, TunnelActor, TunnelRequest,
-	TunnelResponse, TunnelServerMessage, is_hop_by_hop_header, read_response_body_bounded,
+	ACTOR_NAME, ActorMessage, AgentMessage, DEFAULT_MAX_BODY_BYTES, Header, TunnelActor,
+	TunnelRequest, TunnelResponse, is_hop_by_hop_header, read_response_body_bounded,
 };
 use rivetkit::{
 	ServeConfig, TypedClientExt,
@@ -45,7 +45,7 @@ struct Args {
 	#[arg(long)]
 	pool: Option<String>,
 
-	/// Base URL served by the wildcard ingress.
+	/// Base URL served by the tunnel gateway.
 	#[arg(
 		long,
 		env = "RIVET_TUNNEL_PUBLIC_BASE_URL",
@@ -54,7 +54,7 @@ struct Args {
 	public_base_url: Url,
 }
 
-type TunnelSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type AgentSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -92,12 +92,12 @@ async fn main() -> Result<()> {
 	let mut announced = false;
 	loop {
 		let socket = tokio::select! {
-			result = handle.inner().web_socket("connect", Some(vec!["rivet-tunnel.v1".into()])) => result,
+			result = handle.inner().web_socket("agent", Some(vec!["rivet-tunnel.v1".into()])) => result,
 			_ = stop.cancelled() => break,
 		};
 		match socket {
 			Ok(socket) => {
-				if let Err(error) = run_connection(
+				if let Err(error) = run_agent_session(
 					socket,
 					&args.endpoint,
 					&public_url,
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
 				)
 				.await
 				{
-					tracing::warn!(%error, "tunnel connection closed; reconnecting");
+					tracing::warn!(%error, "agent connection closed; reconnecting");
 				}
 			}
 			Err(error) => tracing::warn!(%error, "failed to connect tunnel; retrying"),
@@ -122,8 +122,8 @@ async fn main() -> Result<()> {
 	Ok(())
 }
 
-async fn run_connection(
-	mut socket: TunnelSocket,
+async fn run_agent_session(
+	mut socket: AgentSocket,
 	local_endpoint: &Url,
 	public_url: &Url,
 	announced: &mut bool,
@@ -134,8 +134,8 @@ async fn run_connection(
 		message = socket.next() => message.context("tunnel closed before ready")??,
 		_ = stop.cancelled() => return Ok(()),
 	};
-	let ready = decode_server_message(ready)?;
-	if !matches!(ready, TunnelServerMessage::Ready { .. }) {
+	let ready = decode_actor_message(ready)?;
+	if !matches!(ready, ActorMessage::Ready { .. }) {
 		bail!("tunnel actor did not send a ready message");
 	}
 	if !*announced {
@@ -153,15 +153,15 @@ async fn run_connection(
 			message = reader.next() => message.context("tunnel websocket closed")??,
 			_ = stop.cancelled() => return Ok(()),
 		};
-		match decode_server_message(message)? {
-			TunnelServerMessage::Ready { .. } => {}
-			TunnelServerMessage::Request(request) => {
+		match decode_actor_message(message)? {
+			ActorMessage::Ready { .. } => {}
+			ActorMessage::Request(request) => {
 				let writer = writer.clone();
 				let local_endpoint = local_endpoint.clone();
 				let http = http.clone();
 				tokio::spawn(async move {
 					let response = forward_request(&http, &local_endpoint, request).await;
-					let payload = match serde_cbor::to_vec(&ConnectorMessage::Response(response)) {
+					let payload = match serde_cbor::to_vec(&AgentMessage::Response(response)) {
 						Ok(payload) => payload,
 						Err(error) => {
 							tracing::error!(%error, "failed to encode tunnel response");
@@ -182,7 +182,7 @@ async fn run_connection(
 	}
 }
 
-fn decode_server_message(message: Message) -> Result<TunnelServerMessage> {
+fn decode_actor_message(message: Message) -> Result<ActorMessage> {
 	match message {
 		Message::Binary(bytes) => serde_cbor::from_slice(&bytes).context("decode tunnel message"),
 		Message::Close(frame) => bail!("tunnel websocket closed: {frame:?}"),

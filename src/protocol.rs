@@ -25,13 +25,13 @@ pub struct TunnelResponse {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum TunnelServerMessage {
+pub enum ActorMessage {
 	Ready { actor_id: String },
 	Request(TunnelRequest),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ConnectorMessage {
+pub enum AgentMessage {
 	Response(TunnelResponse),
 }

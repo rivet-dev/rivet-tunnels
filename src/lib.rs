@@ -2,7 +2,7 @@ mod actor;
 mod protocol;
 
 pub use actor::{ACTOR_NAME, TunnelActor};
-pub use protocol::{ConnectorMessage, Header, TunnelRequest, TunnelResponse, TunnelServerMessage};
+pub use protocol::{ActorMessage, AgentMessage, Header, TunnelRequest, TunnelResponse};
 
 pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
@@ -53,7 +53,7 @@ mod tests {
 
 	#[test]
 	fn protocol_round_trips_through_cbor() {
-		let message = TunnelServerMessage::Request(TunnelRequest {
+		let message = ActorMessage::Request(TunnelRequest {
 			id: 7,
 			method: "POST".into(),
 			path: "/hello?name=rivet".into(),
@@ -64,7 +64,7 @@ mod tests {
 			body: b"hello".to_vec(),
 		});
 		let bytes = serde_cbor::to_vec(&message).unwrap();
-		let decoded: TunnelServerMessage = serde_cbor::from_slice(&bytes).unwrap();
+		let decoded: ActorMessage = serde_cbor::from_slice(&bytes).unwrap();
 		assert_eq!(decoded, message);
 	}
 }
