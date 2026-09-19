@@ -11,6 +11,7 @@ axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 parking_lot = "0.12"
+percent-encoding = "2"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rivetkit = { version = "2.3.18-rc.2", default-features = false }

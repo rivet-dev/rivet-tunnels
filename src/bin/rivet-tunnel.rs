@@ -6,8 +6,9 @@ use futures_util::{SinkExt, StreamExt};
 use rand::{Rng, distr::Alphanumeric};
 use reqwest::{Client as HttpClient, Method, redirect::Policy};
 use rivet_tunnel::{
-	ACTOR_NAME, ActorMessage, AgentMessage, DEFAULT_MAX_BODY_BYTES, Header, TunnelActor,
-	TunnelRequest, TunnelResponse, is_hop_by_hop_header, read_response_body_bounded,
+	ACTOR_NAME, ActorMessage, AgentMessage, DEFAULT_MAX_BODY_BYTES, Header, RivetEndpoint,
+	TunnelActor, TunnelRequest, TunnelResponse, is_hop_by_hop_header, is_rivet_control_header,
+	read_response_body_bounded,
 };
 use rivetkit::{
 	ServeConfig, TypedClientExt,
@@ -17,6 +18,8 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+const LOCAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(55);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -31,7 +34,7 @@ struct Args {
 
 	/// Rivet API endpoint hosting the tunnel actor.
 	#[arg(long)]
-	rivet: Option<String>,
+	rivet: Option<RivetEndpoint>,
 
 	/// Rivet namespace containing the tunnel actor.
 	#[arg(long)]
@@ -66,16 +69,25 @@ async fn main() -> Result<()> {
 	let tunnel_name = random_tunnel_name();
 	let public_url = tunnel_url(&args.gateway, &tunnel_name)?;
 	let defaults = ServeConfig::from_env();
+	let (endpoint, endpoint_namespace, endpoint_token) = match args.rivet {
+		Some(endpoint) => (endpoint.url.to_string(), endpoint.namespace, endpoint.token),
+		None => (defaults.endpoint, None, None),
+	};
 	let client = Client::new(
-		ClientConfig::new(args.rivet.unwrap_or(defaults.endpoint))
-			.namespace(args.namespace.unwrap_or(defaults.namespace))
-			.token_opt(args.token.or(defaults.token))
+		ClientConfig::new(endpoint)
+			.namespace(
+				args.namespace
+					.or(endpoint_namespace)
+					.unwrap_or(defaults.namespace),
+			)
+			.token_opt(args.token.or(endpoint_token).or(defaults.token))
 			.pool_name(args.pool.unwrap_or(defaults.pool_name)),
 	);
 	let handle =
 		client.get_or_create_typed_default::<TunnelActor>(ACTOR_NAME, [tunnel_name.as_str()])?;
 	let http = HttpClient::builder()
 		.redirect(Policy::none())
+		.timeout(LOCAL_REQUEST_TIMEOUT)
 		.build()
 		.context("build local HTTP client")?;
 	let stop = CancellationToken::new();
@@ -214,20 +226,49 @@ async fn forward_request_inner(
 	let url = local_request_url(local_endpoint, &request.path)?;
 	let method = Method::from_bytes(request.method.as_bytes()).context("invalid HTTP method")?;
 	let mut builder = http.request(method, url).body(request.body);
+	let connection_headers: Vec<_> = request
+		.headers
+		.iter()
+		.filter(|header| header.name.eq_ignore_ascii_case("connection"))
+		.flat_map(|header| header.value.split(','))
+		.map(str::trim)
+		.filter(|value| !value.is_empty())
+		.map(str::to_ascii_lowercase)
+		.collect();
 	for header in request.headers {
 		if !is_hop_by_hop_header(&header.name)
 			&& !header.name.eq_ignore_ascii_case("host")
 			&& !header.name.eq_ignore_ascii_case("content-length")
+			&& !is_rivet_control_header(&header.name)
+			&& !connection_headers
+				.iter()
+				.any(|name| name.eq_ignore_ascii_case(&header.name))
 		{
 			builder = builder.header(&header.name, &header.value);
 		}
 	}
 	let response = builder.send().await.context("send local request")?;
 	let status = response.status().as_u16();
+	let response_connection_headers: Vec<_> = response
+		.headers()
+		.get_all("connection")
+		.iter()
+		.filter_map(|value| value.to_str().ok())
+		.flat_map(|value| value.split(','))
+		.map(str::trim)
+		.filter(|value| !value.is_empty())
+		.map(str::to_ascii_lowercase)
+		.collect();
 	let headers = response
 		.headers()
 		.iter()
-		.filter(|(name, _)| !is_hop_by_hop_header(name.as_str()))
+		.filter(|(name, _)| {
+			!is_hop_by_hop_header(name.as_str())
+				&& name.as_str() != "content-length"
+				&& !response_connection_headers
+					.iter()
+					.any(|header| header == name.as_str())
+		})
 		.map(|(name, value)| Header {
 			name: name.to_string(),
 			value: String::from_utf8_lossy(value.as_bytes()).into_owned(),
@@ -265,6 +306,15 @@ fn random_tunnel_name() -> String {
 }
 
 fn tunnel_url(base: &Url, tunnel_name: &str) -> Result<Url> {
+	if !matches!(base.scheme(), "http" | "https") {
+		bail!("gateway URL must use http or https");
+	}
+	if !base.username().is_empty() || base.password().is_some() {
+		bail!("gateway URL cannot contain credentials");
+	}
+	if base.path() != "/" || base.query().is_some() || base.fragment().is_some() {
+		bail!("gateway URL must not contain a path, query, or fragment");
+	}
 	let host = base
 		.host_str()
 		.context("public base URL must have a host")?;
@@ -294,5 +344,27 @@ mod tests {
 			local_request_url(&base, "/users?id=7").unwrap().as_str(),
 			"http://127.0.0.1:3000/api/users?id=7"
 		);
+	}
+
+	#[test]
+	fn rejects_gateway_url_with_path() {
+		let base = Url::parse("https://example.com/tunnels").unwrap();
+		assert!(tunnel_url(&base, "quiet-river").is_err());
+	}
+
+	#[test]
+	fn parses_explicit_connection_flags() {
+		let args = Args::try_parse_from([
+			"rivet-tunnel",
+			"--rivet",
+			"https://namespace:token@api.rivet.dev",
+			"--gateway",
+			"https://example.com",
+			"--endpoint",
+			"http://127.0.0.1:3000",
+		])
+		.unwrap();
+		assert_eq!(args.rivet.unwrap().namespace.as_deref(), Some("namespace"));
+		assert_eq!(args.gateway.host_str(), Some("example.com"));
 	}
 }

@@ -9,14 +9,14 @@ FROM debian:bookworm-slim
 
 RUN apt-get update \
 	&& apt-get install --yes --no-install-recommends ca-certificates \
+	&& groupadd --system rivet \
+	&& useradd --system --gid rivet --no-create-home rivet \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/rivet-tunnel-server /usr/local/bin/rivet-tunnel-server
 
-ENV RIVETKIT_RUNTIME_MODE=serverless \
-	RIVETKIT_ENGINE_SPAWN=never \
-	RIVET_PORT=8080
-
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/rivet-tunnel-server"]
+USER rivet
+
+ENTRYPOINT ["/usr/local/bin/rivet-tunnel-server", "--runtime-mode", "serverless", "--engine-spawn", "never"]

@@ -1659,6 +1659,7 @@ dependencies = [
  "futures-util",
  "http",
  "parking_lot",
+ "percent-encoding",
  "rand 0.9.5",
  "reqwest",
  "rivetkit",

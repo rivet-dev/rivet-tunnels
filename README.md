@@ -48,11 +48,10 @@ python3 -m http.server 3000 --bind 0.0.0.0
 
 **Step 2: Start the tunnel server**
 
-
 The server runs both the gateway and the Rivet Actor. It also downloads and starts a local Rivet engine.
 
 ```bash
-cargo run --bin rivet-tunnel-server -- --engine-auto-download --host 0.0.0.0
+cargo run --bin rivet-tunnel-server -- --engine-auto-download
 ```
 
 **Step 3: Open a tunnel**
@@ -86,16 +85,18 @@ docker build -t rivet-tunnel-server .
 
 **Step 3: Deploy the tunnel server**
 
-Deploy the image with these environment variables:
+Deploy the image with these command-line flags:
 
 ```bash
 rivet-tunnel-server \
   --runtime-mode serverless \
+  --engine-spawn never \
   --rivet "<endpoint>" \
   --base-domain example.com
 ```
 
 Register `https://<server>/api/rivet` as the serverless actor runner for the endpoint.
+Use `https://<server>/healthz` for deployment health checks.
 
 **Step 4: Configure wildcard DNS**
 

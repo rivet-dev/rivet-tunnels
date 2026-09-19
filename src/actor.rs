@@ -161,6 +161,16 @@ impl Actor for TunnelActor {
 		}
 
 		let request_id = self.runtime.next_request_id.fetch_add(1, Ordering::Relaxed);
+		let connection_headers: Vec<_> = req
+			.headers()
+			.get_all("connection")
+			.iter()
+			.filter_map(|value| value.to_str().ok())
+			.flat_map(|value| value.split(','))
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(str::to_ascii_lowercase)
+			.collect();
 		let request = TunnelRequest {
 			id: request_id,
 			method: req.method().to_string(),
@@ -168,7 +178,14 @@ impl Actor for TunnelActor {
 			headers: req
 				.headers()
 				.iter()
-				.filter(|(name, _)| !is_hop_by_hop_header(name.as_str()))
+				.filter(|(name, _)| {
+					!is_hop_by_hop_header(name.as_str())
+						&& name.as_str() != "content-length"
+						&& !crate::is_rivet_control_header(name.as_str())
+						&& !connection_headers
+							.iter()
+							.any(|header| header == name.as_str())
+				})
 				.map(|(name, value)| Header {
 					name: name.to_string(),
 					value: String::from_utf8_lossy(value.as_bytes()).into_owned(),
@@ -204,10 +221,25 @@ impl Actor for TunnelActor {
 		if response.body.len() > DEFAULT_MAX_BODY_BYTES {
 			return Ok(text_response(502, "response body exceeds 8 MiB")?.into());
 		}
+		let connection_headers: Vec<_> = response
+			.headers
+			.iter()
+			.filter(|header| header.name.eq_ignore_ascii_case("connection"))
+			.flat_map(|header| header.value.split(','))
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(str::to_ascii_lowercase)
+			.collect();
 		let headers = response
 			.headers
 			.into_iter()
-			.filter(|header| !is_hop_by_hop_header(&header.name))
+			.filter(|header| {
+				!is_hop_by_hop_header(&header.name)
+					&& !header.name.eq_ignore_ascii_case("content-length")
+					&& !connection_headers
+						.iter()
+						.any(|name| name.eq_ignore_ascii_case(&header.name))
+			})
 			.map(|header| (header.name, header.value))
 			.collect();
 		Ok(Response::from_parts(response.status, headers, response.body)?.into())
