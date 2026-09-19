@@ -60,6 +60,25 @@ curl --fail --silent --show-error \
 
 `cmp` exits successfully without output when the response traveled through the gateway, actor, and agent and matches the file served by the app.
 
+## Cloud Run actor backend
+
+The included `Dockerfile` runs the actor in RivetKit's serverless mode. Deploy it with one actor request per instance and scale-to-zero enabled:
+
+```bash
+gcloud run deploy rivet-tunnels \
+  --project <gcp-project> \
+  --region us-west1 \
+  --source . \
+  --allow-unauthenticated \
+  --min-instances 0 \
+  --max-instances 20 \
+  --concurrency 1 \
+  --timeout 3600 \
+  --port 8080
+```
+
+Configure the Rivet namespace's serverless runner URL as `https://<cloud-run-host>/api/rivet`, with a request lifespan below Cloud Run's timeout. The public gateway is a separate deployment.
+
 ## Rivet Cloud routing
 
 The actor and agent can use Rivet Cloud through the `RIVET_ENDPOINT` copied from the Rivet dashboard. The public wildcard must terminate at the tunnel gateway—not directly at `api.rivet.dev`:
