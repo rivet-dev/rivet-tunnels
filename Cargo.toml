@@ -8,7 +8,7 @@ publish = false
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 parking_lot = "0.12"
 rand = "0.9"

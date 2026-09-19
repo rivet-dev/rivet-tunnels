@@ -1,14 +1,14 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use reqwest::{Client, Method};
 use rivet_tunnel::{
 	ACTOR_NAME, DEFAULT_MAX_BODY_BYTES, TunnelActor, is_hop_by_hop_header,
 	read_response_body_bounded,
 };
 use rivetkit::{
-	Registry, RuntimeMode, ServeConfig,
+	Registry, ServeConfig,
 	serverless_http::{
 		self, ApplicationFetch, ApplicationRequest, ApplicationResponse, ApplicationResponseBody,
 		ListenerConfig,
@@ -20,11 +20,17 @@ use url::Url;
 #[derive(Parser, Debug)]
 #[command(name = "rivet-tunnel-server", version, about = "Rivet tunnel server")]
 struct Args {
-	#[arg(long, env = "LISTEN_ADDR", default_value = "0.0.0.0:8080")]
+	#[arg(long, default_value = "0.0.0.0:8080")]
 	listen: SocketAddr,
 
+	#[arg(long, value_enum, default_value_t = RunMode::Envoy)]
+	runtime_mode: RunMode,
+
 	#[arg(long)]
-	rivet_endpoint: Option<Url>,
+	engine_auto_download: bool,
+
+	#[arg(long)]
+	rivet: Option<Url>,
 
 	#[arg(long)]
 	namespace: Option<String>,
@@ -32,11 +38,17 @@ struct Args {
 	#[arg(long)]
 	token: Option<String>,
 
-	#[arg(long, env = "RIVET_TUNNEL_BASE_DOMAIN", default_value = "localhost")]
+	#[arg(long, default_value = "localhost")]
 	base_domain: String,
 
 	#[arg(long)]
 	host: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RunMode {
+	Envoy,
+	Serverless,
 }
 
 struct GatewayState {
@@ -57,8 +69,9 @@ async fn main() -> Result<()> {
 		.init();
 
 	let args = Args::parse();
+	let runtime_mode = args.runtime_mode;
 	let mut config = ServeConfig::from_env();
-	if let Some(endpoint) = args.rivet_endpoint {
+	if let Some(endpoint) = args.rivet {
 		config.endpoint = endpoint.to_string();
 	}
 	if let Some(namespace) = args.namespace {
@@ -68,6 +81,7 @@ async fn main() -> Result<()> {
 		config.token = Some(token);
 	}
 	config.engine_host = args.host;
+	config.engine_auto_download = args.engine_auto_download;
 
 	let state = Arc::new(GatewayState {
 		http: Client::builder()
@@ -101,8 +115,8 @@ async fn main() -> Result<()> {
 	registry.register_actor::<TunnelActor>(ACTOR_NAME);
 	let shutdown = CancellationToken::new();
 
-	match RuntimeMode::from_env() {
-		RuntimeMode::Serverless => {
+	match runtime_mode {
+		RunMode::Serverless => {
 			let runtime = registry.into_serverless_runtime(config).await?;
 			let runtime_for_shutdown = runtime.clone();
 			let mut server =
@@ -117,7 +131,7 @@ async fn main() -> Result<()> {
 			runtime_for_shutdown.shutdown().await;
 			result
 		}
-		RuntimeMode::Envoy => {
+		RunMode::Envoy => {
 			let mut actors = tokio::spawn(registry.serve_with_config(config, shutdown.clone()));
 			let mut gateway = tokio::spawn(serverless_http::serve_application(
 				listener,

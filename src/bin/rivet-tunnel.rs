@@ -31,7 +31,7 @@ struct Args {
 
 	/// Rivet API endpoint hosting the tunnel actor.
 	#[arg(long)]
-	rivet_endpoint: Option<String>,
+	rivet: Option<String>,
 
 	/// Rivet namespace containing the tunnel actor.
 	#[arg(long)]
@@ -46,12 +46,8 @@ struct Args {
 	pool: Option<String>,
 
 	/// Base URL served by the tunnel gateway.
-	#[arg(
-		long,
-		env = "RIVET_TUNNEL_PUBLIC_BASE_URL",
-		default_value = "http://localhost:8080"
-	)]
-	public_base_url: Url,
+	#[arg(long, default_value = "http://localhost:8080")]
+	gateway: Url,
 }
 
 type AgentSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -68,10 +64,10 @@ async fn main() -> Result<()> {
 
 	let args = Args::parse();
 	let tunnel_name = random_tunnel_name();
-	let public_url = tunnel_url(&args.public_base_url, &tunnel_name)?;
+	let public_url = tunnel_url(&args.gateway, &tunnel_name)?;
 	let defaults = ServeConfig::from_env();
 	let client = Client::new(
-		ClientConfig::new(args.rivet_endpoint.unwrap_or(defaults.endpoint))
+		ClientConfig::new(args.rivet.unwrap_or(defaults.endpoint))
 			.namespace(args.namespace.unwrap_or(defaults.namespace))
 			.token_opt(args.token.or(defaults.token))
 			.pool_name(args.pool.unwrap_or(defaults.pool_name)),

@@ -52,7 +52,7 @@ python3 -m http.server 3000 --bind 0.0.0.0
 The server runs both the gateway and the Rivet Actor. It also downloads and starts a local Rivet engine.
 
 ```bash
-RIVETKIT_ENGINE_AUTO_DOWNLOAD=1 cargo run --bin rivet-tunnel-server -- --host 0.0.0.0
+cargo run --bin rivet-tunnel-server -- --engine-auto-download --host 0.0.0.0
 ```
 
 **Step 3: Open a tunnel**
@@ -61,7 +61,14 @@ RIVETKIT_ENGINE_AUTO_DOWNLOAD=1 cargo run --bin rivet-tunnel-server -- --host 0.
 cargo run --bin rivet-tunnel -- --endpoint http://127.0.0.1:3000
 ```
 
-Open the printed `http://<tunnel-name>.localhost:8080` URL.
+**Step 4: Send a request**
+
+Replace `<tunnel-name>` with the name printed by the agent:
+
+```bash
+curl --resolve "<tunnel-name>.localhost:8080:127.0.0.1" \
+  "http://<tunnel-name>.localhost:8080"
+```
 
 ## Production deployment
 
@@ -82,10 +89,10 @@ docker build -t rivet-tunnel-server .
 Deploy the image with these environment variables:
 
 ```bash
-RIVETKIT_RUNTIME_MODE=serverless \
-RIVET_ENDPOINT="<endpoint>" \
-RIVET_TUNNEL_BASE_DOMAIN="example.com" \
-rivet-tunnel-server
+rivet-tunnel-server \
+  --runtime-mode serverless \
+  --rivet "<endpoint>" \
+  --base-domain example.com
 ```
 
 Register `https://<server>/api/rivet` as the serverless actor runner for the endpoint.
@@ -99,9 +106,10 @@ Point `*.example.com` at the server. Your proxy or load balancer must preserve t
 Run the agent with the same Rivet endpoint and the public base URL.
 
 ```bash
-RIVET_ENDPOINT="<endpoint>" \
-RIVET_TUNNEL_PUBLIC_BASE_URL="https://example.com" \
-rivet-tunnel --endpoint http://127.0.0.1:3000
+rivet-tunnel \
+  --rivet "<endpoint>" \
+  --gateway https://example.com \
+  --endpoint http://127.0.0.1:3000
 ```
 
 ## Limits
