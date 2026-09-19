@@ -1,0 +1,10 @@
+{
+  "name": "@rivet-labs/tunnel-win32-x64",
+  "version": "0.0.1",
+  "description": "rivet-tunnel binary for Windows x64",
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "https://github.com/rivet-dev/rivet-tunnels" },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin"]
+}
