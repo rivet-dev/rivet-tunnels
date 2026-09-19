@@ -1,0 +1,78 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            package: linux-x64
+            binary: rivet-tunnel
+          - os: ubuntu-24.04-arm
+            package: linux-arm64
+            binary: rivet-tunnel
+          - os: macos-13
+            package: darwin-x64
+            binary: rivet-tunnel
+          - os: macos-14
+            package: darwin-arm64
+            binary: rivet-tunnel
+          - os: windows-latest
+            package: win32-x64
+            binary: rivet-tunnel.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked --bin rivet-tunnel
+      - shell: bash
+        run: |
+          mkdir -p artifact
+          cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.binary }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: artifact/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - env:
+          VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
+            mkdir -p "npm/platforms/$platform/bin"
+            cp artifacts/$platform/* "npm/platforms/$platform/bin/"
+            npm version "$VERSION" --no-git-tag-version --prefix "npm/platforms/$platform"
+            npm publish --access public "npm/platforms/$platform"
+          done
+          npm version "$VERSION" --no-git-tag-version --prefix npm
+          node -e '
+            const fs = require("fs");
+            const path = "npm/package.json";
+            const pkg = JSON.parse(fs.readFileSync(path));
+            for (const name of Object.keys(pkg.optionalDependencies)) pkg.optionalDependencies[name] = process.env.VERSION;
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n");
+          '
+          npm publish --access public npm

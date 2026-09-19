@@ -1,0 +1,23 @@
+{
+  "name": "@rivet-labs/tunnel",
+  "version": "0.0.1",
+  "description": "Experimental HTTP tunnels powered by Rivet Actors",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rivet-dev/rivet-tunnels"
+  },
+  "bin": {
+    "rivet-tunnel": "bin/rivet-tunnel"
+  },
+  "optionalDependencies": {
+    "@rivet-labs/tunnel-darwin-arm64": "0.0.1",
+    "@rivet-labs/tunnel-darwin-x64": "0.0.1",
+    "@rivet-labs/tunnel-linux-arm64": "0.0.1",
+    "@rivet-labs/tunnel-linux-x64": "0.0.1",
+    "@rivet-labs/tunnel-win32-x64": "0.0.1"
+  },
+  "files": [
+    "bin"
+  ]
+}
