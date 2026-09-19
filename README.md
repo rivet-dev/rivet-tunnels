@@ -15,8 +15,17 @@ The npm package and hosted gateway are not available yet. Use the local setup be
 
 ```mermaid
 flowchart LR
+    Client
+    subgraph Server["rivet-tunnel-server"]
+        Gateway
+        Actor
+        Gateway --> Actor
+    end
+    subgraph CLI["rivet-tunnel"]
+        Agent
+    end
+    App
     Client --> Gateway
-    Gateway --> Actor
     Actor <--> Agent
     Agent --> App
 ```
@@ -31,19 +40,24 @@ The agent creates an actor with a random tunnel name. The gateway reads that nam
 
 ## Local setup
 
-Run these four processes from the repository root:
+**Step 1: Start a local app**
 
 ```bash
-# 1. Start an example app.
 python3 -m http.server 3000 --bind 0.0.0.0
+```
 
-# 2. Start the actor and a local Rivet engine.
-RIVETKIT_ENGINE_AUTO_DOWNLOAD=1 cargo run --bin rivet-tunnel-actor -- --host 0.0.0.0
+**Step 2: Start the tunnel server**
 
-# 3. Start the public gateway.
-cargo run --bin rivet-tunnel-gateway -- --listen 0.0.0.0:8080
 
-# 4. Open the tunnel.
+The server runs both the gateway and the Rivet Actor. It also downloads and starts a local Rivet engine.
+
+```bash
+RIVETKIT_ENGINE_AUTO_DOWNLOAD=1 cargo run --bin rivet-tunnel-server -- --host 0.0.0.0
+```
+
+**Step 3: Open a tunnel**
+
+```bash
 cargo run --bin rivet-tunnel -- --endpoint http://127.0.0.1:3000
 ```
 
@@ -51,10 +65,36 @@ Open the printed `http://<tunnel-name>.localhost:8080` URL.
 
 ## Production deployment
 
-1. Get a Rivet endpoint from [Rivet Cloud](https://rivet.dev) or a self-hosted Rivet deployment.
-2. Deploy `rivet-tunnel-actor` and register its `/api/rivet` route as the serverless actor runner for that endpoint.
-3. Deploy `rivet-tunnel-gateway` with `RIVET_ENDPOINT` and `RIVET_TUNNEL_BASE_DOMAIN`, then point wildcard DNS for the base domain at the gateway. The gateway must receive the original `Host` header.
-4. Run the agent with the same `RIVET_ENDPOINT` and set `RIVET_TUNNEL_PUBLIC_BASE_URL` to the public base URL.
+**Step 1: Get a Rivet endpoint**
+
+Get an endpoint from [Rivet Cloud](https://rivet.dev) or a self-hosted Rivet deployment.
+
+**Step 2: Deploy the tunnel server**
+
+Deploy the included `Dockerfile`. The single server handles both Rivet Actor requests and public tunnel traffic.
+
+```bash
+RIVETKIT_RUNTIME_MODE=serverless \
+RIVET_ENDPOINT="<endpoint>" \
+RIVET_TUNNEL_BASE_DOMAIN="example.com" \
+rivet-tunnel-server
+```
+
+Register `https://<server>/api/rivet` as the serverless actor runner for the endpoint.
+
+**Step 3: Configure wildcard DNS**
+
+Point `*.example.com` at the server. Your proxy or load balancer must preserve the original `Host` header.
+
+**Step 4: Open a tunnel**
+
+Run the agent with the same Rivet endpoint and the public base URL.
+
+```bash
+RIVET_ENDPOINT="<endpoint>" \
+RIVET_TUNNEL_PUBLIC_BASE_URL="https://example.com" \
+rivet-tunnel --endpoint http://127.0.0.1:3000
+```
 
 ## Limits
 
